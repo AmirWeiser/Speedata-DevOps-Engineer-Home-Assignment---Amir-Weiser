@@ -75,6 +75,28 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/w" -w /w pytho
   'pip install -q --user pip-tools==7.6.2 && /tmp/.local/bin/pip-compile -q --generate-hashes --strip-extras --no-emit-index-url -o requirements.txt requirements.in'
 ```
 
+## CI: GitHub Actions -> GHCR
+
+Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+
+```
+test (backend, frontend)          image (backend, frontend), after both tests pass
+  ruff lint + format check          build once -> image.tar
+  pytest                            Trivy: vulnerabilities (image.tar) + Dockerfile misconfig
+                                    smoke test: run image.tar read-only, /healthz 200, UID 10001
+                                    [push to main] skopeo push image.tar -> verify digest unchanged
+```
+
+| Event | Runs? | Publishes? |
+|---|---|---|
+| Pull request to `main` | Always (no path filter, so it can be a required check) | No |
+| Push to `main` touching anything other than `**.md` / `docs/**` | Yes | Yes |
+| Push to `main` touching only `**.md` / `docs/**` | Skipped | No |
+
+Images: `ghcr.io/amirweiser/skywatch-backend` and `ghcr.io/amirweiser/skywatch-frontend`, tagged with the
+**full commit SHA** (no `latest`). The run summary records the tag and the digest. An existing SHA tag is never
+overwritten. Design rationale: [ADR-007](docs/decisions.md).
+
 ## Documentation
 
 - [Architecture decisions](docs/decisions.md)

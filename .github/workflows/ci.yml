@@ -1,0 +1,176 @@
+name: CI
+
+# When it runs:
+#   pull_request -> main : always (no path filter), so the checks can safely be made
+#                          "required" later. Tests, build, scan, smoke test. Publishes nothing.
+#   push -> main         : unless only Markdown/docs changed. Same checks, then publishes
+#                          the exact scanned image to GHCR, tagged with the full commit SHA.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs are cancelled; every push to main finishes and gets its image.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Trivy runs as a container pinned by digest (no third-party action gets the job token).
+  TRIVY_IMAGE: public.ecr.aws/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  ARCHIVE: /tmp/image.tar
+
+jobs:
+  test:
+    name: test (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            app/${{ matrix.service }}/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --require-hashes -r app/${{ matrix.service }}/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          ruff check app/${{ matrix.service }}
+          ruff format --check app/${{ matrix.service }}
+
+      - name: Unit tests
+        working-directory: app/${{ matrix.service }}
+        run: python -m pytest
+
+  image:
+    name: image (${{ matrix.service }})
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # used only by the publish step, which runs only on push to main
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            port: 8000
+          - service: frontend
+            port: 8080
+    env:
+      SERVICE: ${{ matrix.service }}
+      PORT: ${{ matrix.port }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set image reference
+        # GHCR requires lowercase; the owner is "AmirWeiser".
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/skywatch-${SERVICE}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Built exactly once, into a file. Every later step uses this same artifact:
+      # the archive is loadable by Docker and is also an OCI layout that skopeo can push.
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app/${{ matrix.service }}
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=docker,dest=${{ env.ARCHIVE }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Scan image for vulnerabilities
+        # Fails on HIGH/CRITICAL that have a fix; unfixed base-OS CVEs are reported, not blocking.
+        run: |
+          docker run --rm -v /tmp:/tmp -v "$HOME/.cache/trivy:/root/.cache/trivy" "$TRIVY_IMAGE" \
+            image --input "$ARCHIVE" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress --skip-version-check
+
+      - name: Scan Dockerfile for misconfigurations
+        run: |
+          docker run --rm -v "$PWD/app/$SERVICE:/src:ro" -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            "$TRIVY_IMAGE" config --severity HIGH,CRITICAL --exit-code 1 --skip-version-check /src
+
+      - name: Smoke test
+        # Same hardening as Kubernetes will apply: read-only root FS, no capabilities.
+        run: |
+          docker load --input "$ARCHIVE"
+          docker run -d --name smoke --read-only --cap-drop ALL --security-opt no-new-privileges \
+            -p "127.0.0.1:18000:${PORT}" "$IMAGE:$GITHUB_SHA"
+          trap 'docker logs smoke; docker rm -f smoke >/dev/null' EXIT
+          for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:18000/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:18000/healthz
+          test "$(docker exec smoke id -u)" = 10001
+
+      - name: Publish to GHCR
+        if: github.event_name == 'push'
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ref="$IMAGE:$GITHUB_SHA"
+          echo "$TOKEN" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'skopeo logout ghcr.io' EXIT
+          # A commit-SHA tag is immutable: if it already exists (e.g. a re-run), never overwrite it.
+          if existing=$(skopeo inspect --format '{{.Digest}}' "docker://$ref" 2>/dev/null); then
+            echo "::notice::$ref already exists ($existing); not overwriting"
+            echo "PUBLISHED_DIGEST=$existing" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # Push the scanned archive byte-for-byte, then prove the registry holds that artifact.
+          skopeo copy --preserve-digests "oci-archive:$ARCHIVE" "docker://$ref"
+          pushed=$(skopeo inspect --format '{{.Digest}}' "docker://$ref")
+          if [ "$pushed" != "$BUILT_DIGEST" ]; then
+            echo "::error::digest mismatch: built $BUILT_DIGEST, registry has $pushed"
+            exit 1
+          fi
+          echo "PUBLISHED_DIGEST=$pushed" >> "$GITHUB_ENV"
+
+      - name: Summary
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### skywatch-${SERVICE}"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Tag (commit SHA) | \`${GITHUB_SHA}\` |"
+            echo "| Built digest | \`${BUILT_DIGEST}\` |"
+            if [ -n "${PUBLISHED_DIGEST:-}" ]; then
+              echo "| Published digest | \`${PUBLISHED_DIGEST}\` |"
+              echo "| Pull | \`docker pull ${IMAGE}@${PUBLISHED_DIGEST}\` |"
+            else
+              echo "| Published | no (pull request) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

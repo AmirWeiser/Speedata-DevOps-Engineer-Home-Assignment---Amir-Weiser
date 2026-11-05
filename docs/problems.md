@@ -2,6 +2,20 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## CI (Stage 1C)
+
+Found by rehearsing every CI command locally before the first run:
+
+### Trivy image not on GHCR
+- **Symptom:** `ghcr.io/aquasecurity/trivy:0.76.1` -> `denied`.
+- **Root cause:** Aqua publishes the Trivy image to Docker Hub, ECR Public and mirror.gcr.io (same digest everywhere), not to GHCR.
+- **Fix:** `public.ecr.aws/aquasecurity/trivy:0.76.1@sha256:790fd66d...` (official source, digest-pinned, avoids Docker Hub's anonymous pull limits on CI runners).
+
+### `docker load` rejected the OCI archive
+- **Symptom:** `invalid archive: does not contain a manifest.json` for a buildx `type=oci` export.
+- **Root cause:** This Docker engine loads only Docker-format archives.
+- **Fix:** buildx `type=docker` export, which writes both `manifest.json` and an OCI layout (`index.json`, `oci-layout`) into one tar. Verified: skopeo reads it as `oci-archive:` with the same digest buildx reported, and a push with `--preserve-digests` keeps that digest.
+
 ## Application (Stage 1B)
 
 ### Open-Meteo returns HTTP 200 for an unknown city
