@@ -1,0 +1,8 @@
+# Normalize to LF so shell scripts, YAML and templates work on Linux
+# even when files are edited from Windows.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

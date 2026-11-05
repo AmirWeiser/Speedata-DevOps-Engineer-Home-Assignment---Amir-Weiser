@@ -1,0 +1,49 @@
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# .terraform.lock.hcl is intentionally committed: it pins provider versions and checksums.
+
+# --- Generated at bootstrap (contain IPs / cluster credentials) ---
+*.generated.*
+kubeconfig*
+*.kubeconfig
+known_hosts*
+
+# --- Secrets and keys ---
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Ansible ---
+*.retry
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
