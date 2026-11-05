@@ -1,0 +1,5 @@
+apiVersion: v2
+name: skywatch
+description: SkyWatch weather app (Flask frontend and backend)
+type: application
+version: 0.1.0

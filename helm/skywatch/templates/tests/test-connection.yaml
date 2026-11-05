@@ -1,0 +1,41 @@
+{{- /*
+`helm test` checks in-cluster Service DNS and connectivity to both components.
+It reuses the backend image (Python urllib), so no extra image is needed.
+It does not call Open-Meteo, so an external outage cannot fail it.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-connection
+  labels:
+    {{- include "skywatch.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: test
+      image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+      imagePullPolicy: {{ .Values.imagePullPolicy }}
+      command:
+        - python
+        - -c
+        - |
+          import urllib.request
+          for url in ("http://{{ .Release.Name }}-backend:{{ .Values.backend.port }}/healthz",
+                      "http://{{ .Release.Name }}-frontend:{{ .Values.frontend.port }}/healthz"):
+              body = urllib.request.urlopen(url, timeout=5).read().decode()
+              print(url, "->", body)
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      securityContext:
+        {{- toYaml .Values.containerSecurityContext | nindent 8 }}

@@ -1,0 +1,16 @@
+{{- /* With a single replica, minAvailable: 1 would block node drains forever. */}}
+{{- if gt (int .Values.backend.replicas) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-backend
+  labels:
+    {{- include "skywatch.labels" . | nindent 4 }}
+    {{- include "skywatch.selectorLabels" (dict "root" . "component" "backend") | nindent 4 }}
+spec:
+  # Voluntary disruptions (node drain, cluster upgrade) must leave one backend serving.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "skywatch.selectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+{{- end }}

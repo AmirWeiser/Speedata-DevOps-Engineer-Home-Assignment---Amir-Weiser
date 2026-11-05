@@ -54,4 +54,23 @@ Short records of significant decisions: context, decision, consequences.
 - **Tags:** full commit SHA only; an existing tag is never overwritten (re-runs keep the original). The digest is the truly immutable reference and is recorded in the run summary.
 - **Gate:** ruff, pytest, `--require-hashes`, Trivy vulnerabilities (HIGH/CRITICAL **with a fix available**), Trivy Dockerfile misconfig (HIGH/CRITICAL), smoke test (read-only FS, no capabilities, `/healthz`, UID 10001). `--ignore-unfixed` because the Debian base has ~46 HIGH CVEs with no upstream fix; blocking on them would keep CI red with nothing actionable.
 - **Security:** `GITHUB_TOKEN` only (no stored secrets); `contents: read` globally, `packages: write` only on the image job; actions pinned to commit SHAs; checkout with `persist-credentials: false`; Trivy runs as a digest-pinned container instead of a third-party action, so no extra code runs with the job token.
-- **Limitations:** `skopeo` comes from the GitHub runner image (version not pinned by us). No image signing/SBOM attestation yet (cosign is a production improvement). Same-repo PRs run the image job with `packages: write` granted but unused, because permissions cannot be conditional per event.
+- **Limitations (CI):** `skopeo` comes from the GitHub runner image (version not pinned by us). No image signing/SBOM attestation yet (cosign is a production improvement). Same-repo PRs run the image job with `packages: write` granted but unused, because permissions cannot be conditional per event.
+
+## ADR-008: Helm chart design
+
+- **Shape:** one chart, two explicit Deployments (no generic "component" template), per-service ConfigMaps via `envFrom`, ClusterIP backend, NodePort frontend, a backend PodDisruptionBudget and a `helm test` pod that reuses the backend image. `BACKEND_URL` is derived from the backend Service name in the template so the two cannot drift.
+- **Config changes roll pods:** a `checksum/config` pod annotation; pods never reread a changed ConfigMap.
+- **Backend spread, one replica per worker:** `topologySpreadConstraints` with `whenUnsatisfiable: DoNotSchedule`, `nodeTaintsPolicy: Honor`, `matchLabelKeys: [pod-template-hash]`.
+
+  | Option | Normal | Worker lost / cordoned | Rolling update (`maxSurge 1`, `maxUnavailable 0`) |
+  |---|---|---|---|
+  | `ScheduleAnyway` | usually spread, not guaranteed | both on survivor | works, may end co-located |
+  | required `podAntiAffinity` | spread | 2nd replica Pending | deadlocks (surge pod has no free node) |
+  | **chosen** | spread | both on survivor (degraded, still 2 serving) | works, new revision spreads independently |
+
+  `Honor` drops tainted nodes (the control plane, cordoned or unreachable workers) from the skew calculation; without it the unschedulable control plane counts as an empty domain. `matchLabelKeys` counts only pods of the same ReplicaSet, so old and new pods don't distort the spread mid-rollout. Accepted trade-off: if a worker is healthy but full, the second replica stays Pending instead of co-locating. Spread is evaluated only at scheduling, so after a worker returns a `rollout restart` rebalances.
+- **Rollouts without errors:** `maxUnavailable: 0` plus a native `preStop: sleep 5s` so a terminating pod keeps serving until endpoint removal propagates; gunicorn then drains in-flight requests.
+- **Security:** pod `runAsNonRoot`, UID/GID 10001, seccomp `RuntimeDefault`, no ServiceAccount token; container read-only root FS, no privilege escalation, all capabilities dropped. Verified against Pod Security Admission `restricted` (enforced on the namespace).
+- **Resources (measured on k3d):** idle 2-3m CPU / 43-47Mi; full path at ~3 req/s 11-24m / 49Mi; peak memory 54Mi. Set requests 50m / 64Mi and limits 500m / 128Mi. A `/healthz` burst drove the frontend to 492m and it was throttled in 407 of 820 CFS periods: the CPU limit caps a noisy pod at the cost of latency under bursts (the assignment requires limits; without that requirement a CPU limit would be optional).
+- **Frontend: 2 replicas + PDB, same spread policy.** With 1 replica, a node drain evicted the only frontend pod (evictions ignore `maxUnavailable`): ~5.6 s with no ready frontend endpoint, 2 of 18 requests failed. With 2 replicas + PDB `minAvailable: 1`: 0 of 23 failed during the drain, never fewer than 1 ready endpoint per Service. Cost: one more 64Mi pod.
+- **Load distribution note:** kube-proxy balances connections, not requests. The frontend reuses keep-alive connections, so each frontend pod tends to stick to one backend pod (measured 5m vs 31m CPU under load). Expected L4 behaviour; per-request balancing would need an L7 proxy or service mesh.

@@ -1,0 +1,57 @@
+# Image tags are full commit SHAs published by CI. They are immutable, so
+# IfNotPresent is safe: a node's cached image for a tag can never be stale.
+imagePullPolicy: IfNotPresent
+
+backend:
+  replicas: 2
+  port: 8000 # must match the port gunicorn binds in the image
+  image:
+    repository: ghcr.io/amirweiser/skywatch-backend
+    tag: 80d7ed150d6dfa053c3798a8b36680854a9b1fd5
+  # Rendered into the backend ConfigMap and exposed as environment variables.
+  config:
+    GEOCODING_URL: https://geocoding-api.open-meteo.com/v1/search
+    FORECAST_URL: https://api.open-meteo.com/v1/forecast
+    UPSTREAM_CONNECT_TIMEOUT: "2"
+    UPSTREAM_READ_TIMEOUT: "4"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+frontend:
+  replicas: 2 # with 1, a node drain leaves no frontend for several seconds (see ADR-008)
+  port: 8080 # must match the port gunicorn binds in the image
+  image:
+    repository: ghcr.io/amirweiser/skywatch-frontend
+    tag: 80d7ed150d6dfa053c3798a8b36680854a9b1fd5
+  # BACKEND_URL is derived from the backend Service name in the template.
+  config:
+    BACKEND_TIMEOUT: "15"
+  service:
+    type: NodePort
+    nodePort: 30080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+# Meets the Kubernetes "restricted" Pod Security Standard.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

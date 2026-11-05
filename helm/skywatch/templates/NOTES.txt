@@ -1,0 +1,8 @@
+SkyWatch is deployed to namespace {{ .Release.Namespace }}.
+
+Frontend: Service {{ .Release.Name }}-frontend ({{ .Values.frontend.service.type }}
+{{- if eq .Values.frontend.service.type "NodePort" }}, node port {{ .Values.frontend.service.nodePort }}{{ end }})
+Backend:  Service {{ .Release.Name }}-backend (ClusterIP, internal only)
+
+  kubectl -n {{ .Release.Namespace }} get pods -o wide
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

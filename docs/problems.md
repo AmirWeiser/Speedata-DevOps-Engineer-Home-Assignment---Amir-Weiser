@@ -2,6 +2,31 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## Helm / Kubernetes (Stage 1D)
+
+### k3d cluster creation failed: host port 8080 already allocated
+- **Symptom:** every `kubectl` call failed with `the server could not find the requested resource`; `k3d cluster create` had actually failed and rolled back (`Bind for 127.0.0.1:8080 failed: port is already allocated`).
+- **Root cause:** the Docker Compose frontend was still running on 8080. With no cluster there was no kubeconfig, so kubectl fell back to its legacy default `http://localhost:8080`, reached our Flask frontend and got its 404 page.
+- **Fix:** the k3d cluster maps host port **8081**, so Compose and k3d can run side by side.
+
+### `helm upgrade` silently kept a previous `--set` value
+- **Symptom:** after `helm upgrade --set backend.config.UPSTREAM_READ_TIMEOUT=5`, a later plain `helm upgrade` (meant to restore `values.yaml`) left pods with `5`.
+- **Root cause:** when `helm upgrade` gets no values flags at all, Helm reuses the previous release's values. `helm get values` showed the leftover `{"UPSTREAM_READ_TIMEOUT": 5}`.
+- **Fix:** `helm upgrade --reset-values`. Lesson for GitOps: imperative Helm releases can hold state that is not in Git; ArgoCD renders from Git every time, which removes this class of drift.
+
+### Node drain caused 2 failed requests (frontend single replica)
+- **Symptom:** draining the worker that hosted the frontend produced 2 `curl` empty replies (exit 52) out of 18 requests.
+- **Root cause (timestamped):** the only frontend pod was evicted; the frontend had 0 ready endpoints for ~5.6 s while the replacement started. The backend never dropped below 1 ready endpoint (PDB + spread worked). Most requests still succeeded because Kubernetes falls back to terminating endpoints when none are ready and the `preStop` sleep kept the old pod serving; failures occurred between gunicorn shutting down and the new pod becoming ready.
+- **Fix:** frontend `replicas: 2`, the same one-per-worker spread as the backend, and a frontend PDB `minAvailable: 1`. Re-test under load: drain 0 of 23 failed (min 1 ready endpoint per Service), 3 rolling updates 0 of 83 failed.
+
+### Misleading `kubectl top` right after a rollout
+- **Symptom:** immediately after a rollout, `kubectl top` listed only 2 of 4 pods at ~210m CPU each.
+- **Root cause:** the pods were seconds old; metrics-server had not scraped the others yet, and ~210m was Python's import spike at startup.
+- **Fix:** measure after pods settle (idle 1-2m; ~3 req/s full path 5-31m; peak memory 48-55Mi).
+
+### k3d checksum verification
+- `checksums.txt` lists files as `_dist/k3d-linux-amd64`; the prefix is stripped before `sha256sum -c`.
+
 ## CI (Stage 1C)
 
 Found by rehearsing every CI command locally before the first run:

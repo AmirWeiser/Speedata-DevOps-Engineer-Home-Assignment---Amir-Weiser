@@ -1,0 +1,26 @@
+# Local cluster that mirrors the AWS topology: 1 tainted control plane + 2 workers,
+# same K3s version, Traefik disabled, images pulled from GHCR like on EC2.
+#   k3d cluster create --config infra/local/k3d.yaml
+#   k3d cluster delete skywatch
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: skywatch
+servers: 1
+agents: 2
+image: rancher/k3s:v1.37.2-k3s1
+ports:
+  # Host loopback 8081 -> NodePort 30080 on the first worker
+  # (8081 so it never collides with `docker compose`, which uses 8080).
+  - port: 127.0.0.1:8081:30080
+    nodeFilters: [agent:0]
+options:
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters: [server:*]
+      - arg: --node-taint=node-role.kubernetes.io/control-plane:NoSchedule
+        nodeFilters: [server:*]
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

@@ -3,7 +3,8 @@
 A small weather-query app (Flask frontend -> Flask backend -> Open-Meteo), built, shipped and run with
 Terraform, Ansible, K3s, Helm, GitHub Actions, GHCR and ArgoCD.
 
-> **Status:** work in progress. The application and its containers are complete and tested locally.
+> **Status:** work in progress. Application, CI (GHCR) and Helm chart are complete and validated on a local
+> k3d cluster. Next: ArgoCD/GitOps, then AWS.
 
 ## Chosen path
 
@@ -96,6 +97,54 @@ test (backend, frontend)          image (backend, frontend), after both tests pa
 Images: `ghcr.io/amirweiser/skywatch-backend` and `ghcr.io/amirweiser/skywatch-frontend`, tagged with the
 **full commit SHA** (no `latest`). The run summary records the tag and the digest. An existing SHA tag is never
 overwritten. Design rationale: [ADR-007](docs/decisions.md).
+
+## Kubernetes: Helm chart
+
+Chart: [`helm/skywatch`](helm/skywatch). Design rationale: [ADR-008](docs/decisions.md).
+
+```
+NodePort 30080 ─▶ Service skywatch-frontend ─▶ frontend (2 pods, one per worker)
+                                                  │ BACKEND_URL=http://skywatch-backend:8000 (ConfigMap)
+                  Service skywatch-backend  ◀─────┘ ClusterIP, internal only
+                          │
+                  backend (2 pods, one per worker) ─▶ Open-Meteo
+```
+
+| Resource | Purpose |
+|---|---|
+| `backend-deployment`, `frontend-deployment` | Probes on `/healthz`, requests/limits, restricted security context, `preStop` sleep, `maxUnavailable: 0` |
+| `backend-service` (ClusterIP), `frontend-service` (NodePort) | Backend is internal only; frontend is reachable from the host |
+| `backend-configmap`, `frontend-configmap` | App settings as env vars; a `checksum/config` annotation rolls pods when they change |
+| `backend-pdb`, `frontend-pdb` | A node drain always leaves one pod of each component serving |
+| `tests/test-connection` | `helm test`: both Services reachable by DNS from inside the cluster |
+
+### Local cluster (k3d)
+
+[`infra/local/k3d.yaml`](infra/local/k3d.yaml) mirrors the AWS topology: 1 tainted control plane + 2 workers,
+K3s v1.37.2, Traefik disabled, images pulled from GHCR. Requires k3d v5.9+.
+
+```bash
+k3d cluster create --config infra/local/k3d.yaml
+kubectl create namespace skywatch
+kubectl label namespace skywatch pod-security.kubernetes.io/enforce=restricted
+helm install skywatch helm/skywatch -n skywatch --wait
+helm test skywatch -n skywatch
+# App: http://localhost:8081/?city=Haifa   (8081 so it never collides with docker compose on 8080)
+k3d cluster delete skywatch
+```
+
+### Inspecting the deployment
+
+```bash
+kubectl get nodes                                              # server tainted, 2 workers
+kubectl -n skywatch get pods -o wide                           # placement: backend on different workers
+kubectl -n skywatch get svc,endpointslices                     # ClusterIP backend, NodePort frontend
+kubectl -n skywatch describe deploy skywatch-backend           # probes, resources, strategy, spread
+kubectl -n skywatch top pods                                   # live CPU / memory
+kubectl -n skywatch logs -l app.kubernetes.io/name=backend -f  # access logs from both replicas
+kubectl -n skywatch exec deploy/skywatch-backend -- id         # uid=10001
+helm -n skywatch get values skywatch                           # values that differ from values.yaml (should be null)
+```
 
 ## Documentation
 

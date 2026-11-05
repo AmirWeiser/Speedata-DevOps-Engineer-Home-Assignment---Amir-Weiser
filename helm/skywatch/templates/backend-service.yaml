@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-backend
+  labels:
+    {{- include "skywatch.labels" . | nindent 4 }}
+    {{- include "skywatch.selectorLabels" (dict "root" . "component" "backend") | nindent 4 }}
+spec:
+  type: ClusterIP # internal only: reachable from inside the cluster, never from outside
+  selector:
+    {{- include "skywatch.selectorLabels" (dict "root" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http
