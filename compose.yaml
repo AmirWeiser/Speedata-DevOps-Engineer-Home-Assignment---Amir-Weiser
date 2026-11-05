@@ -1,0 +1,25 @@
+# Local end-to-end environment for development only.
+# Kubernetes deployment is defined by the Helm chart, not by this file.
+#   docker compose up --build   ->   http://localhost:8080
+
+x-hardening: &hardening
+  read_only: true            # mirrors readOnlyRootFilesystem in Kubernetes
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  backend:
+    <<: *hardening
+    build: ./app/backend
+    image: skywatch-backend:local
+    # No "ports": reachable only from the compose network, like a ClusterIP Service.
+
+  frontend:
+    <<: *hardening
+    build: ./app/frontend
+    image: skywatch-frontend:local
+    environment:
+      BACKEND_URL: http://backend:8000   # compose DNS name, like a Kubernetes Service name
+    ports:
+      - "127.0.0.1:8080:8080"           # host loopback only
+    depends_on: [backend]

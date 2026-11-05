@@ -1,0 +1,14 @@
+# Tool configuration only; the services are not packaged.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Service directories, so their modules (app, weather) are sorted as first-party imports.
+src = ["app/backend", "app/frontend"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

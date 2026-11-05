@@ -1,0 +1,5 @@
+# Top-level runtime dependencies. requirements.txt is the hash-locked result:
+#   see "Updating dependencies" in the README.
+flask>=3.1,<4
+gunicorn>=26,<27
+requests>=2.32,<3

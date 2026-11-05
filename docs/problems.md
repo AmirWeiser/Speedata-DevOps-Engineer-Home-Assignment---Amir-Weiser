@@ -2,6 +2,20 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## Application (Stage 1B)
+
+### Open-Meteo returns HTTP 200 for an unknown city
+- **Symptom (observed against the live API):** `?name=xqzvbnm` -> `200 {"generationtime_ms": 0.08}`; there is no 404 and no empty `results` list, the key is simply absent.
+- **Fix:** The client treats a missing or empty `results` key as `CityNotFound` (-> 404); a unit test uses the exact captured payload.
+
+### ruff sorted our own modules as third-party imports
+- **Symptom:** `I001 Import block is un-sorted` on `from weather import ...` / `from app import ...`.
+- **Root cause:** ruff decides what is first-party from its `src` setting (default: the repo root). The service modules live in `app/backend` and `app/frontend`, so ruff saw them as unknown third-party packages.
+- **Fix:** `src = ["app/backend", "app/frontend"]` in `pyproject.toml`.
+
+### Multi-stage build produced a larger image
+- See ADR-006: 140 MB vs. 129 MB because the copied virtualenv duplicates pip/setuptools. Kept single-stage.
+
 ## Workstation (Stage 1A)
 
 ### Docker CLI returned HTTP 500 from the engine API

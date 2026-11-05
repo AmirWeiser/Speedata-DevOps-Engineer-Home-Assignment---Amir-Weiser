@@ -27,3 +27,22 @@ Short records of significant decisions: context, decision, consequences.
 
 - **Why ansible-core 2.21 and not 2.22:** 2.22 requires Python >= 3.13 on the controller; Ubuntu 24.04 ships 3.12. 2.21.6 is the newest release supporting 3.12, avoiding a second Python installation.
 - **Why kubectl v1.37:** kubectl supports +/-1 minor version skew against the API server; matching the K3s minor is simplest.
+
+## ADR-004: Health endpoints check only the process, never dependencies
+
+- **Context:** Kubernetes restarts containers that fail liveness and removes pods that fail readiness from Service endpoints.
+- **Decision:** `/healthz` on both services returns 200 if the process can serve requests. It does not call Open-Meteo (backend) or the backend (frontend).
+- **Consequences:** An Open-Meteo outage leaves all backend pods running and routable; users get a fast 502/504 with a clear message instead of a total outage or a restart loop. Dependency failures are visible through status codes and logs (and later, metrics), not through probes.
+
+## ADR-005: Timeout budget and no retries
+
+- **Decision:** Backend -> Open-Meteo: 2 s connect / 4 s read per call; two sequential calls, worst case ~12 s. Frontend -> backend: 15 s. Gunicorn worker timeout: 30 s. All configurable via environment variables.
+- **Why:** Each layer times out after the layer beneath it, so the deepest failure is reported accurately (504 "timed out") instead of a confusing timeout one level up. No automatic retries: in a synchronous chain they multiply latency and upstream load; the user can resubmit.
+- **Verified:** with an unroutable upstream the backend returns 504 after 2.06 s.
+
+## ADR-006: Single-stage Dockerfiles, hash-locked dependencies
+
+- **Measured:** single-stage 129 MB (+9.7 MB over `python:3.12-slim-trixie`) vs. multi-stage venv copy 140 MB (+20.8 MB). The copied venv carries its own pip/setuptools; there are no build-only tools to discard because every dependency is a prebuilt wheel.
+- **Decision:** Single-stage. Revisit if a dependency ever needs compilation (gcc, headers), which is when multi-stage pays off.
+- **Supply chain:** `requirements.in` (intent) -> `requirements.txt` locked with `pip-compile --generate-hashes`, installed with `--require-hashes`, so a modified or substituted package fails the build. The base image is pinned to Python minor + Debian release; digest pinning is a later improvement (it needs an automated updater to avoid stale, unpatched images).
+- **Runtime:** numeric UID 10001, read-only root filesystem compatible (gunicorn `--worker-tmp-dir /dev/shm`), gunicorn gthread 1 worker x 4 threads (I/O-bound; scale with replicas).

@@ -1,0 +1,4 @@
+# Test and lint tooling (not shipped in images). Install the service
+# requirements first, then: pip install -r requirements-dev.txt
+pytest==9.2.0
+ruff==0.17.3

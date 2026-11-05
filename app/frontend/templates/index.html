@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyWatch</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #1f2933; }
+    h1 { margin-bottom: 0.25rem; }
+    form { display: flex; gap: 0.5rem; margin: 1.5rem 0; }
+    input { flex: 1; padding: 0.5rem; font-size: 1rem; }
+    button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+    .card { border: 1px solid #d9e2ec; border-radius: 8px; padding: 1rem 1.25rem; }
+    .temp { font-size: 2.5rem; margin: 0.5rem 0; }
+    .error { border-color: #f5b5b5; background: #fff5f5; color: #9b1c1c; }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; margin: 0; }
+    dt { color: #627d98; }
+  </style>
+</head>
+<body>
+  <h1>SkyWatch</h1>
+  <p>Current weather for any city.</p>
+
+  <form method="get" action="/">
+    <input name="city" placeholder="e.g. Haifa" value="{{ city or '' }}" maxlength="100" required autofocus>
+    <button type="submit">Search</button>
+  </form>
+
+  {% if error %}
+    <div class="card error" role="alert">{{ error }}</div>
+  {% elif weather %}
+    <div class="card">
+      <h2>{{ weather.city }}{% if weather.country %}, {{ weather.country }}{% endif %}</h2>
+      <div class="temp">{{ weather.temperature_c }}&nbsp;°C</div>
+      <p>{{ weather.condition }}</p>
+      <dl>
+        <dt>Feels like</dt><dd>{{ weather.apparent_temperature_c }} °C</dd>
+        <dt>Humidity</dt><dd>{{ weather.humidity_pct }}%</dd>
+        <dt>Wind</dt><dd>{{ weather.wind_speed_kmh }} km/h</dd>
+        <dt>Observed</dt><dd>{{ weather.observed_at }} ({{ weather.timezone }})</dd>
+      </dl>
+    </div>
+  {% endif %}
+</body>
+</html>
