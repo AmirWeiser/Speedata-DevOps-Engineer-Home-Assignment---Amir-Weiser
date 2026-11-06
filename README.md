@@ -3,8 +3,8 @@
 A small weather-query app (Flask frontend -> Flask backend -> Open-Meteo), built, shipped and run with
 Terraform, Ansible, K3s, Helm, GitHub Actions, GHCR and ArgoCD.
 
-> **Status:** work in progress. Application, CI (GHCR) and Helm chart are complete and validated on a local
-> k3d cluster. Next: ArgoCD/GitOps, then AWS.
+> **Status:** work in progress. Application, CI (GHCR), Helm chart and the Argo CD GitOps flow are complete and
+> validated end to end on a local k3d cluster. Next: AWS (Terraform + Ansible).
 
 ## Chosen path
 
@@ -78,21 +78,24 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/w" -w /w pytho
 
 ## CI: GitHub Actions -> GHCR
 
-Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+Workflows: [`ci.yml`](.github/workflows/ci.yml) (app) and [`chart.yml`](.github/workflows/chart.yml) (Helm lint).
 
 ```
-test (backend, frontend)          image (backend, frontend), after both tests pass
-  ruff lint + format check          build once -> image.tar
-  pytest                            Trivy: vulnerabilities (image.tar) + Dockerfile misconfig
-                                    smoke test: run image.tar read-only, /healthz 200, UID 10001
-                                    [push to main] skopeo push image.tar -> verify digest unchanged
+test (backend, frontend)     image (backend, frontend)                    update image tags (push to main)
+  ruff lint + format check     build once -> image.tar                      verify both SHA tags exist in GHCR
+  pytest                       Trivy: vulnerabilities + Dockerfile config   write SHA into helm/skywatch/values.yaml
+                               smoke test: read-only, /healthz, UID 10001   (forward-only), commit + push
+                               [push to main] skopeo push, verify digest    -> Argo CD deploys it
 ```
 
-| Event | Runs? | Publishes? |
+| Event | `ci.yml` | `chart.yml` |
 |---|---|---|
-| Pull request to `main` | Always (no path filter, so it can be a required check) | No |
-| Push to `main` touching anything other than `**.md` / `docs/**` | Yes | Yes |
-| Push to `main` touching only `**.md` / `docs/**` | Skipped | No |
+| Pull request to `main` | Always (tests, build, scan, smoke; publishes nothing) | Always |
+| Push to `main` changing application code or workflows | Full run: publish images + update Helm tags | If chart/Argo CD files changed |
+| Push to `main` changing only `docs/**`, `**.md`, `helm/**`, `argocd/**`, `infra/**` | Skipped (images unaffected) | If chart/Argo CD files changed |
+| CI's own tag commit (`deploy: images <sha> [skip ci]`) | Not triggered (pushed with `GITHUB_TOKEN`) | Not triggered |
+
+Note: a commit message containing `[skip ci]` anywhere skips every workflow for that push.
 
 Images: `ghcr.io/amirweiser/skywatch-backend` and `ghcr.io/amirweiser/skywatch-frontend`, tagged with the
 **full commit SHA** (no `latest`). The run summary records the tag and the digest. An existing SHA tag is never
@@ -116,37 +119,67 @@ NodePort 30080 ─▶ Service skywatch-frontend ─▶ frontend (2 pods, one per
 | `backend-service` (ClusterIP), `frontend-service` (NodePort) | Backend is internal only; frontend is reachable from the host |
 | `backend-configmap`, `frontend-configmap` | App settings as env vars; a `checksum/config` annotation rolls pods when they change |
 | `backend-pdb`, `frontend-pdb` | A node drain always leaves one pod of each component serving |
-| `tests/test-connection` | `helm test`: both Services reachable by DNS from inside the cluster |
+| `tests/test-connection` | `helm test` for manual Helm installs (Argo CD does not run Helm test hooks) |
 
-### Local cluster (k3d)
+Render or lint locally without a cluster: `helm template skywatch helm/skywatch -n skywatch`,
+`helm lint --strict helm/skywatch`.
+
+## GitOps: Argo CD
+
+Git is the only deployment interface. CI never talks to the cluster; it records in Git which images to run.
+
+```
+developer push (app code) ─▶ CI: test ─▶ build/scan/smoke ─▶ publish to GHCR ─▶ commit SHA into values.yaml
+                                                                                        │
+cluster ◀── rolling update ◀── Argo CD auto-sync (polls main every ~2-3 min) ◀───────────┘
+```
+
+| Piece | What it does |
+|---|---|
+| [`scripts/bootstrap-argocd.sh`](scripts/bootstrap-argocd.sh) | One-time, idempotent: installs Argo CD (chart 10.10.5 = v3.5.5, [`argocd/values.yaml`](argocd/values.yaml)) and applies the Application |
+| [`argocd/skywatch-application.yaml`](argocd/skywatch-application.yaml) | Deploys `helm/skywatch` from `main`; automated sync with **prune** and **self-heal**; creates the namespace with the `restricted` Pod Security label |
+| `update image tags` job in `ci.yml` | After both images are published, commits the commit SHA into `values.yaml` (never moves backwards) |
+
+Design rationale and trade-offs: [ADR-009](docs/decisions.md). Evidence: [docs/gitops-evidence.md](docs/gitops-evidence.md).
+
+### Bring up the local environment from scratch
 
 [`infra/local/k3d.yaml`](infra/local/k3d.yaml) mirrors the AWS topology: 1 tainted control plane + 2 workers,
-K3s v1.37.2, Traefik disabled, images pulled from GHCR. Requires k3d v5.9+.
+K3s v1.37.2, Traefik disabled, images pulled from GHCR. Requires Docker, k3d v5.9+, kubectl and Helm.
 
 ```bash
 k3d cluster create --config infra/local/k3d.yaml
-kubectl create namespace skywatch
-kubectl label namespace skywatch pod-security.kubernetes.io/enforce=restricted
-helm install skywatch helm/skywatch -n skywatch --wait
-helm test skywatch -n skywatch
+scripts/bootstrap-argocd.sh          # waits until the app is Synced and Healthy (~5 min on a laptop)
 # App: http://localhost:8081/?city=Haifa   (8081 so it never collides with docker compose on 8080)
-k3d cluster delete skywatch
+k3d cluster delete skywatch          # tear down
 ```
 
-### Inspecting the deployment
+### Day-to-day workflow
+
+1. Change application code, push to `main` (or open a PR first: it runs every check without publishing).
+2. CI publishes images and pushes `deploy: images <sha> [skip ci]` to `main`. **Run `git pull` before your next
+   commit**, since CI now commits too.
+3. Argo CD rolls the cluster forward within a few minutes. Rollback = `git revert` the tag commit.
+
+Never `kubectl edit`/`helm upgrade` managed resources: self-heal reverts manual changes within seconds.
+
+### Inspecting Argo CD and the deployment
 
 ```bash
+kubectl -n argocd get application skywatch                     # SYNC STATUS / HEALTH STATUS
+kubectl -n argocd get application skywatch -o jsonpath='{.status.operationState.phase} {.status.operationState.syncResult.revision}{"\n"}'
+kubectl -n argocd port-forward svc/argocd-server 8443:443      # UI: https://localhost:8443 (self-signed cert), user admin
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
 kubectl get nodes                                              # server tainted, 2 workers
-kubectl -n skywatch get pods -o wide                           # placement: backend on different workers
-kubectl -n skywatch get svc,endpointslices                     # ClusterIP backend, NodePort frontend
-kubectl -n skywatch describe deploy skywatch-backend           # probes, resources, strategy, spread
-kubectl -n skywatch top pods                                   # live CPU / memory
+kubectl -n skywatch get pods -o wide                           # one frontend + one backend per worker
+kubectl -n skywatch get deploy -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'
+kubectl -n skywatch get svc,endpointslices,pdb
+kubectl -n skywatch top pods
 kubectl -n skywatch logs -l app.kubernetes.io/name=backend -f  # access logs from both replicas
-kubectl -n skywatch exec deploy/skywatch-backend -- id         # uid=10001
-helm -n skywatch get values skywatch                           # values that differ from values.yaml (should be null)
 ```
 
 ## Documentation
 
 - [Architecture decisions](docs/decisions.md)
 - [Problems and solutions](docs/problems.md)
+- [CI evidence](docs/ci-evidence.md), [GitOps evidence](docs/gitops-evidence.md)

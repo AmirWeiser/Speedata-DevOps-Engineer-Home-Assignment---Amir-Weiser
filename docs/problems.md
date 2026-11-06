@@ -2,6 +2,28 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## GitOps / Argo CD (Stage 1E)
+
+### A push started no workflows: `[skip ci]` in the commit message body
+- **Symptom:** commit `3bd3232` (the Argo CD + CI change) produced 0 workflow runs.
+- **Root cause:** its message body described the loop guards and contained the literal text `[skip ci]`. GitHub skips push workflows if that marker appears anywhere in the message.
+- **Fix:** none needed for the files (no history rewrite); the next application commit exercised the pipeline. Rule: never write the skip marker in a human commit message.
+
+### Test harness declared success before Argo CD had synced
+- **Symptom:** the watcher reported "synced", then found `OutOfSync` and old images.
+- **Root cause:** `.status.sync.revision` is the revision Argo CD *compared against*; it moves to the new commit as soon as the commit is detected (that is what OutOfSync means). The sync itself is reported in `.status.operationState` (`phase`, `syncResult.revision`).
+- **Fix:** wait for `operationState.phase=Succeeded` at the expected revision, then for the rollouts and Synced/Healthy. The auto-sync had in fact completed 16 s later.
+
+### Handing an existing Helm release over to Argo CD
+- Argo CD does not use Helm release records. Leaving them would show a stale `helm list` entry and invite a `helm upgrade` that fights Argo CD. Deleted the `sh.helm.release.v1.skywatch.*` Secrets only; Argo CD adopted the running resources with identical pod UIDs.
+
+### Cosmetic: yq drops blank lines; finalizer warning
+- The first CI tag commit removed the blank lines between top-level sections of `values.yaml` (comments are kept). The format is stable afterwards, so later tag commits are two-line diffs.
+- Kubernetes 1.37 warns that `resources-finalizer.argocd.argoproj.io` has no `/`. It is still Argo CD's documented cascade-delete finalizer.
+
+### Local `main` falls behind after every deployment
+- CI pushes the tag commit to `main`, so a developer must `git pull` (fast-forward) before the next push; otherwise the push is rejected as non-fast-forward. Documented in the README workflow.
+
 ## Helm / Kubernetes (Stage 1D)
 
 ### k3d cluster creation failed: host port 8080 already allocated

@@ -5,4 +5,6 @@ Frontend: Service {{ .Release.Name }}-frontend ({{ .Values.frontend.service.type
 Backend:  Service {{ .Release.Name }}-backend (ClusterIP, internal only)
 
   kubectl -n {{ .Release.Namespace }} get pods -o wide
-  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+In the GitOps setup this chart is deployed by Argo CD: change helm/skywatch in Git,
+not the cluster (self-heal reverts manual changes).
