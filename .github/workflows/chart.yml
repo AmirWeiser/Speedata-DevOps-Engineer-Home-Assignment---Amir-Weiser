@@ -1,0 +1,32 @@
+name: Chart
+
+# Lints and renders the Helm chart. Cheap, so it runs on every PR (safe to make "required"),
+# and on pushes to main that touch the chart or the Argo CD definitions. CI image tag updates
+# are pushed with GITHUB_TOKEN and therefore do not trigger this workflow.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "helm/**"
+      - "argocd/**"
+      - ".github/workflows/chart.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: helm lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint and render the chart
+        run: |
+          helm version --short
+          helm lint --strict helm/skywatch
+          helm template skywatch helm/skywatch --namespace skywatch > /dev/null

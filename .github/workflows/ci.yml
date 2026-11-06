@@ -3,8 +3,10 @@ name: CI
 # When it runs:
 #   pull_request -> main : always (no path filter), so the checks can safely be made
 #                          "required" later. Tests, build, scan, smoke test. Publishes nothing.
-#   push -> main         : unless only Markdown/docs changed. Same checks, then publishes
-#                          the exact scanned image to GHCR, tagged with the full commit SHA.
+#   push -> main         : unless only docs, the Helm chart, Argo CD or local-cluster files changed
+#                          (none of them affect the images; the chart is linted by chart.yml).
+#                          Same checks, publishes the exact scanned images to GHCR tagged with the
+#                          full commit SHA, then points the Helm values at them (Argo CD deploys).
 on:
   pull_request:
     branches: [main]
@@ -13,13 +15,17 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - "helm/**"
+      - "argocd/**"
+      - "infra/**"
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Superseded PR runs are cancelled; every push to main finishes and gets its image.
+  # PR runs: superseded runs are cancelled. main: runs never cancel each other mid-flight; they
+  # run one at a time, and if several are queued GitHub keeps only the newest pending one.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -174,3 +180,61 @@ jobs:
               echo "| Published | no (pull request) |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # GitOps hand-off: CI never deploys. It only records in Git which images to run;
+  # Argo CD notices the commit and rolls the cluster forward.
+  update-tags:
+    name: update image tags
+    needs: image # both matrix jobs (test, scan, smoke test, publish) must have succeeded
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # push the values.yaml commit; nothing else
+    env:
+      VALUES: helm/skywatch/values.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history for the forward-only (ancestry) check
+
+      - name: Verify both images are in GHCR
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for svc in backend frontend; do
+            echo "skywatch-${svc}: $(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/${owner}/skywatch-${svc}:${GITHUB_SHA}")"
+          done
+
+      - name: Point Helm values at the new images
+        # The commit is pushed with GITHUB_TOKEN, and GitHub does not start workflows for
+        # GITHUB_TOKEN pushes, so this cannot loop. [skip ci] and the helm/** path filter
+        # are additional guards.
+        run: |
+          yq --version
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            current=$(yq '.backend.image.tag' "$VALUES")
+            if [ "$current" = "$GITHUB_SHA" ]; then
+              echo "values.yaml already points to $GITHUB_SHA"; exit 0
+            fi
+            if ! git cat-file -e "${current}^{commit}" 2>/dev/null; then
+              echo "::error::current tag $current is not a commit in this repository"; exit 1
+            fi
+            # Forward-only: a slower or re-run job for an older commit must not roll main back.
+            if ! git merge-base --is-ancestor "$current" "$GITHUB_SHA"; then
+              echo "::notice::values.yaml points to $current, which is newer than $GITHUB_SHA; skipping stale update"
+              exit 0
+            fi
+            yq -i ".backend.image.tag = \"$GITHUB_SHA\" | .frontend.image.tag = \"$GITHUB_SHA\"" "$VALUES"
+            git commit --quiet -am "deploy: images ${GITHUB_SHA::7} [skip ci]"
+            git show --stat --oneline HEAD | head -5
+            if git push --quiet origin HEAD:main; then
+              echo "### Helm values updated to \`${GITHUB_SHA}\` in $(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "push rejected because main moved; retrying (attempt $attempt)"
+            sleep $((attempt * 3))
+          done
+          echo "::error::could not push the values update after 5 attempts"; exit 1

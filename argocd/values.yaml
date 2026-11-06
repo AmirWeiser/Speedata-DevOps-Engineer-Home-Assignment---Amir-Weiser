@@ -1,0 +1,6 @@
+# Argo CD Helm values (chart argo-cd 10.10.5 = Argo CD v3.5.5, pinned in scripts/bootstrap-argocd.sh).
+# Everything not listed here uses the chart defaults.
+dex:
+  enabled: false # no SSO; the local admin account is enough for this project
+notifications:
+  enabled: false # no notification channels configured

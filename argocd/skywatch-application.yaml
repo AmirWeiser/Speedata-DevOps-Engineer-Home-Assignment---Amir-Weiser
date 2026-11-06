@@ -1,0 +1,31 @@
+# The only manifest applied by hand (once, by scripts/bootstrap-argocd.sh).
+# From then on Argo CD deploys whatever helm/skywatch on main describes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: skywatch
+  namespace: argocd
+  # Deleting this Application also deletes the resources it manages.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AmirWeiser/Speedata-DevOps-Engineer-Home-Assignment---Amir-Weiser.git
+    targetRevision: main
+    path: helm/skywatch
+    helm:
+      releaseName: skywatch # keeps resource names (skywatch-backend, ...) stable
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: skywatch
+  syncPolicy:
+    automated:
+      prune: true # resources removed from Git are deleted from the cluster
+      selfHeal: true # manual changes to managed resources are reverted
+    syncOptions:
+      - CreateNamespace=true
+    # The namespace is created by Argo CD with the Pod Security label, so it is also in Git.
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: restricted
