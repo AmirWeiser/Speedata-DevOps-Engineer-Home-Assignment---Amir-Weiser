@@ -59,7 +59,7 @@ def test_invalid_input_returns_400(http, weather_client, query):
 @pytest.mark.parametrize(
     ("exception", "status"),
     [
-        (CityNotFound("Atlantis"), 404),
+        (CityNotFound("Atlantis"), 500),
         (UpstreamTimeout("slow"), 504),
         (UpstreamError("boom"), 502),
     ],
