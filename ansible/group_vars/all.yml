@@ -1,0 +1,4 @@
+---
+# Same K3s version as the local k3d cluster (infra/local/k3d.yaml). Changing it and
+# re-running the playbook upgrades the cluster in place (server first, then agents).
+k3s_version: v1.37.2+k3s1

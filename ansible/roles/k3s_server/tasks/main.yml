@@ -1,0 +1,67 @@
+---
+- name: Create the K3s configuration directory
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: "0755"
+
+# Configuration lives in a file, not in installer flags, so changing it is a
+# normal Ansible change (template -> handler restart) instead of a reinstall.
+- name: Write the K3s server configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Read the installed K3s version
+  ansible.builtin.command: /usr/local/bin/k3s --version
+  register: k3s_server_installed
+  changed_when: false
+  failed_when: false
+
+# Never uninstalls: install only when K3s is missing or at a different version
+# (which upgrades in place, keeping cluster state).
+- name: Install K3s server {{ k3s_version }}
+  when: k3s_version not in (k3s_server_installed.stdout | default(''))
+  block:
+    - name: Download the K3s installer for {{ k3s_version }}
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
+        dest: /usr/local/bin/k3s-install.sh
+        mode: "0755"
+
+    - name: Run the K3s installer (verifies the binary checksum)
+      ansible.builtin.command: /usr/local/bin/k3s-install.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: server
+      changed_when: true
+
+- name: Apply pending configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure K3s is running and enabled
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Wait for the Kubernetes API to be ready
+  ansible.builtin.command: k3s kubectl get --raw /readyz
+  register: k3s_server_readyz
+  until: k3s_server_readyz.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Read the cluster join token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/token
+  register: k3s_server_token_raw
+  no_log: true
+
+- name: Keep the join token in memory for the agent play (never written locally)
+  ansible.builtin.set_fact:
+    k3s_server_token: "{{ k3s_server_token_raw.content | b64decode | trim }}"
+  no_log: true

@@ -1,0 +1,12 @@
+# Managed by Ansible (k3s_server role). Do not edit on the host.
+node-name: {{ inventory_hostname }}
+node-ip: {{ private_ip }}
+# The API certificate must also be valid for the public IP that kubectl uses.
+tls-san:
+  - {{ k3s_api_endpoint }}
+# Control plane only: application pods are scheduled on the agents.
+node-taint:
+  - node-role.kubernetes.io/control-plane:NoSchedule
+disable:
+  - traefik
+write-kubeconfig-mode: "0600"

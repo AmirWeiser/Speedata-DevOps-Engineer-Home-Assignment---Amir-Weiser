@@ -3,8 +3,9 @@ name: CI
 # When it runs:
 #   pull_request -> main : always (no path filter), so the checks can safely be made
 #                          "required" later. Tests, build, scan, smoke test. Publishes nothing.
-#   push -> main         : unless only docs, the Helm chart, Argo CD or local-cluster files changed
-#                          (none of them affect the images; the chart is linted by chart.yml).
+#   push -> main         : unless only docs, the Helm chart, Argo CD, infrastructure (Terraform,
+#                          Ansible) or scripts changed (none of them affect the images; the
+#                          chart is linted by chart.yml).
 #                          Same checks, publishes the exact scanned images to GHCR tagged with the
 #                          full commit SHA, then points the Helm values at them (Argo CD deploys).
 on:
@@ -18,6 +19,8 @@ on:
       - "helm/**"
       - "argocd/**"
       - "infra/**"
+      - "ansible/**"
+      - "scripts/**"
 
 permissions:
   contents: read

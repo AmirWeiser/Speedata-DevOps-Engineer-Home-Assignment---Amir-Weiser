@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored) or pass with -var.
+
+# Required: your public IP as /32  ->  curl -s https://checkip.amazonaws.com
+admin_cidr = "203.0.113.10/32"
+
+# Optional: who may open the frontend. Default: admin_cidr only.
+# app_cidrs = ["0.0.0.0/0"]
+
+# Optional overrides
+# region                      = "us-east-1"
+# control_plane_instance_type = "t3.small"
+# worker_instance_type        = "t3.medium"
+# run_ansible                 = false   # infrastructure only; run ansible-playbook yourself

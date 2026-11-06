@@ -2,6 +2,22 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## AWS code (Stage 2, static validation only; not yet applied)
+
+### ansible-lint production profile: unprefixed role variables
+- **Finding:** `var-naming[no-role-prefix]` for a `set_fact` and three `register:` variables inside the roles.
+- **Fix:** renamed to `k3s_server_*` / `k3s_agent_*` (the API path `/readyz` in the command was deliberately left untouched).
+
+### Issues caught by review before any run
+- `cloud-init status --wait` exits 2 when boot finished with recoverable warnings; accepted rc 0 or 2 instead of failing.
+- `kubectl wait --for=condition=Ready node --all` only waits for nodes that already registered, so a slow agent could pass the check; replaced with a retry until every inventory host is Ready.
+- The implicit `localhost` is not in inventory groups; the Argo CD play reads `kubeconfig_path` from the server's hostvars.
+- `admin_cidr` was removed from the bootstrap triggers: an IP change only needs security group updates, not a K3s re-run.
+
+### Trivy findings on Terraform
+- CRITICAL AWS-0104 (unrestricted egress) on the 80/443 rules: accepted with an inline, commented `#trivy:ignore` (nodes must reach CDN-backed registries and APIs).
+- MEDIUM AWS-0178 (no VPC Flow Logs): accepted for an ephemeral demo, listed as a production improvement.
+
 ## GitOps / Argo CD (Stage 1E)
 
 ### A push started no workflows: `[skip ci]` in the commit message body
