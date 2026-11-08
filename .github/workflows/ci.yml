@@ -21,6 +21,7 @@ on:
       - "infra/**"
       - "ansible/**"
       - "scripts/**"
+      - ".githooks/**"
 
 permissions:
   contents: read

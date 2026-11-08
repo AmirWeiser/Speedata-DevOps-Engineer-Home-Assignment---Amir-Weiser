@@ -2,6 +2,34 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## Pre-apply review (Stage 2)
+
+### Bootstrap could start before the security group rules existed
+- **Root cause:** `aws_instance` depends on its security groups, but the rules are separate `aws_vpc_security_group_*_rule` resources created in parallel. `terraform_data.bootstrap` waited only for the instances, so Ansible could race the SSH, egress and K3s port rules (masked by the SSH retry, not prevented).
+- **Fix:** explicit `depends_on` on every rule resource.
+
+### A replaced worker could not rejoin
+- **Root cause:** K3s protects node names with `kube-system/<node>.node-password.k3s` (verified on the local cluster). A new machine with the same node name presents a different password and is rejected.
+- **Fix:** when a host has no K3s installed, the agent role deletes the old Node and its node-password secret (from the server) before installing. Never runs on a working node or during an upgrade.
+
+### Argo CD bootstrap was "idempotent" only by suppressing change reporting
+- **Root cause:** `changed_when: false` hid that every run executed `helm upgrade`, creating a new Helm revision.
+- **Fix:** the script records `chart=<version> values=<sha>` as the release description and skips Helm when it matches; Ansible reports `changed` from the script's real output. Verified on a throwaway cluster: second run "unchanged", Helm revisions stayed at 1, Application "unchanged".
+
+### Bootstrap could target the wrong cluster
+- **Fix:** `EXPECTED_CONTEXT` guard (Ansible sets `skywatch-aws`); verified it refuses a mismatching context with exit 1.
+
+### Transient chart download failure (HTTP 504 from GitHub Releases)
+- **Symptom:** observed twice while testing: `failed to fetch .../argo-cd-10.10.5.tgz : 504 Gateway Time-out`.
+- **Fix:** 3 attempts with backoff around `helm upgrade --install`. Partially verified: after a 504 the script continued to register the Application (the test was then stopped by host memory pressure).
+
+### Executable bit lost when a script was rewritten from Windows
+- **Symptom:** `scripts/bootstrap-argocd.sh: Permission denied` in testing after the file was rewritten through the `\\wsl.localhost` share (new file mode 0644).
+- **Fix:** `chmod +x`; checked that git still records `100755` before committing. Would otherwise have failed the first AWS bootstrap.
+
+### Secret scan did not block commits
+- **Fix:** `.githooks/pre-commit` runs gitleaks (pinned by digest) on staged changes and exits non-zero on a finding. Verified: full history (16 commits) clean; a staged fake token is blocked; the Jinja `token:` expression that the old regex flagged passes.
+
 ## AWS code (Stage 2, static validation only; not yet applied)
 
 ### ansible-lint production profile: unprefixed role variables

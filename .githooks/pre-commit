@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Blocks the commit when gitleaks finds a secret in the staged changes.
+# Enable once per clone:  git config core.hooksPath .githooks
+# (Bypassing with --no-verify is possible; never do it for a real finding.)
+set -euo pipefail
+
+image=ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+repo=$(git rev-parse --show-toplevel)
+
+if ! docker run --rm -v "${repo}:/repo" -w /repo --user "$(id -u):$(id -g)" "${image}" \
+  git --pre-commit --staged --redact --no-banner .; then
+  echo "pre-commit: gitleaks found a potential secret in the staged changes; commit blocked." >&2
+  exit 1
+fi

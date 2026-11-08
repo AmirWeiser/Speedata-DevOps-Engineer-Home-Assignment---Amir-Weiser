@@ -26,6 +26,13 @@ filesystem. Docker is provided by Docker Desktop's WSL integration.
 | AWS CLI | v2 |
 | gh, git, Python 3.12, Docker | current |
 
+**Secret scanning:** enable the repository's pre-commit hook once per clone. It runs
+[gitleaks](https://github.com/gitleaks/gitleaks) (pinned image) on the staged changes and blocks the commit on a finding.
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Application
 
 ```
@@ -93,7 +100,7 @@ test (backend, frontend)     image (backend, frontend)                    update
 |---|---|---|
 | Pull request to `main` | Always (tests, build, scan, smoke; publishes nothing) | Always |
 | Push to `main` changing application code or workflows | Full run: publish images + update Helm tags | If chart/Argo CD files changed |
-| Push to `main` changing only `docs/**`, `**.md`, `helm/**`, `argocd/**`, `infra/**`, `ansible/**`, `scripts/**` | Skipped (images unaffected) | If chart/Argo CD files changed |
+| Push to `main` changing only `docs/**`, `**.md`, `helm/**`, `argocd/**`, `infra/**`, `ansible/**`, `scripts/**`, `.githooks/**` | Skipped (images unaffected) | If chart/Argo CD files changed |
 | CI's own tag commit (`deploy: images <sha> [skip ci]`) | Not triggered (pushed with `GITHUB_TOKEN`) | Not triggered |
 
 Note: a commit message containing `[skip ci]` anywhere skips every workflow for that push.
@@ -230,9 +237,24 @@ when sustained above baseline). No NAT Gateway, load balancer, Elastic IP or Clo
 ### Prerequisites
 
 - WSL/Linux with Terraform >= 1.10, ansible-core, kubectl, Helm (see Workstation prerequisites), AWS CLI credentials.
-- IAM permissions: EC2 only. Create/describe/delete VPC, subnet, internet gateway, route table, security group (+ rules),
-  key pair (import), instances (run/terminate/describe/modify), `DescribeImages`, `DescribeAvailabilityZones`, tags.
-  No IAM, S3 or other services. (Use a dedicated least-privilege user rather than an administrator.)
+- IAM permissions: EC2 only (VPC, subnet, internet gateway, route table, security groups and rules, key pair import,
+  instances, image and AZ lookups, tags). No IAM, S3 or other services are used. Prefer a dedicated deployer user over
+  an administrator, for example:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      { "Sid": "Ec2InProjectRegion", "Effect": "Allow", "Action": "ec2:*", "Resource": "*",
+        "Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } } },
+      { "Sid": "ReadOnlyChecks", "Effect": "Allow",
+        "Action": ["sts:GetCallerIdentity", "tag:GetResources", "pricing:GetProducts"], "Resource": "*" }
+    ]
+  }
+  ```
+
+  This still allows any EC2 action in the region (including on unrelated instances); tighter scoping with tag
+  conditions is possible but much longer.
 - An SSH key pair: `ssh-keygen -t ed25519 -f ~/.ssh/skywatch_ed25519 -C skywatch-admin`
   (with a passphrase, run `ssh-add ~/.ssh/skywatch_ed25519` first; Ansible runs non-interactively).
 
@@ -265,6 +287,16 @@ terraform -chdir=infra/aws output app_urls        # open http://<worker-ip>:3008
 The AWS cluster runs the same Argo CD Application as the local cluster: both follow `helm/skywatch` on `main`. A push
 to `main` goes through CI, CI commits the new image tag, and Argo CD rolls out the change on every cluster that runs it.
 No credentials for the AWS cluster exist outside your machine.
+
+### Recovery
+
+| Situation | What happens / what to do |
+|---|---|
+| Ansible (bootstrap) fails during `apply` | Instances and network stay; only `terraform_data.bootstrap` is marked tainted. Fix the cause, then `terraform apply` again (re-runs only the playbook) or `cd ansible && ansible-playbook site.yml`. The playbook is idempotent; Argo CD install retries transient chart-download errors. |
+| Your public IP changed | `terraform apply -var admin_cidr=<new>/32` updates only the security groups. |
+| An instance got a new public IP (stop/start) | `terraform apply` re-runs the playbook (trigger includes public IPs): new `tls-san`, new kubeconfig. |
+| A worker must be replaced | `terraform apply -replace='aws_instance.node["skywatch-worker-1"]'`. The playbook removes the old Node and its K3s node-password secret before the new machine joins under the same name; Argo CD reschedules the pods. |
+| The control plane is lost | Single server = cluster state lost. Rebuild: `terraform destroy` + `terraform apply` (~10-15 min); Argo CD restores the app from Git. |
 
 ### Tear down
 

@@ -59,7 +59,18 @@ resource "terraform_data" "bootstrap" {
     command     = "ansible-playbook site.yml"
   }
 
-  depends_on = [local_file.inventory, aws_route_table_association.public]
+  # Instances only depend on their security groups, not on the separate rule resources,
+  # so wait explicitly for routing and every rule (SSH in, 80/443 out, K3s ports).
+  depends_on = [
+    local_file.inventory,
+    aws_route_table_association.public,
+    aws_vpc_security_group_ingress_rule.cluster_internal,
+    aws_vpc_security_group_egress_rule.cluster_internal,
+    aws_vpc_security_group_egress_rule.web,
+    aws_vpc_security_group_ingress_rule.control_plane_admin,
+    aws_vpc_security_group_ingress_rule.workers_ssh,
+    aws_vpc_security_group_ingress_rule.workers_app,
+  ]
 }
 
 # Removes the local files that belong to this environment when it is destroyed.

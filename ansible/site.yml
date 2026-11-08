@@ -75,10 +75,11 @@
       environment:
         # Read from the server host: the implicit localhost is not in the inventory groups.
         KUBECONFIG: "{{ hostvars[groups['k3s_server'][0]].kubeconfig_path }}"
+        EXPECTED_CONTEXT: skywatch-aws # the script refuses any other cluster
       register: argocd_bootstrap
-      # helm upgrade --install and kubectl apply converge: a re-run changes no resources.
-      changed_when: false
+      # Reports what actually happened: the script skips Helm when chart and values are unchanged.
+      changed_when: argocd_bootstrap.stdout is search('==> Installing|skywatch (created|configured)')
 
     - name: Show bootstrap result
       ansible.builtin.debug:
-        msg: "{{ argocd_bootstrap.stdout_lines | select('match', '^(==>|skywatch:)') | list }}"
+        msg: "{{ argocd_bootstrap.stdout_lines | select('match', '^(==>|skywatch:|application)') | list }}"
