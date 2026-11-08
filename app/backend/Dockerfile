@@ -5,6 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Apply Debian security fixes published after the base image was built (e.g. zlib).
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
 
 WORKDIR /app
