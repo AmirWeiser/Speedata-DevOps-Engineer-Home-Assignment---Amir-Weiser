@@ -3,10 +3,14 @@
 A small weather-query app (Flask frontend -> Flask backend -> Open-Meteo), built, shipped and run with
 Terraform, Ansible, K3s, Helm, GitHub Actions, GHCR and ArgoCD.
 
-> **Status:** complete. The same chart and Argo CD Application run on two clusters: a local k3d cluster and a
+> **Status:** complete. The same chart and Argo CD Application were deployed to two clusters: a local k3d cluster and a
 > three-node K3s cluster on AWS EC2. Both were validated end to end, including a push to `main` rolling out through
 > CI and Argo CD with zero failed requests. Evidence: [docs/gitops-evidence.md](docs/gitops-evidence.md) and the
 > [screenshots below](#proof-of-the-gitops-flow).
+>
+> The AWS environment was successfully provisioned, validated end-to-end, and subsequently destroyed to avoid ongoing
+> cloud costs. The Terraform and Ansible configurations remain in the repository for reproducibility. The local k3d
+> environment remains available for demonstration and review.
 
 ## Chosen path: hybrid
 
@@ -20,7 +24,8 @@ Terraform, Ansible, K3s, Helm, GitHub Actions, GHCR and ArgoCD.
 
 The laptop (Windows, WSL2) cannot comfortably run three Ubuntu VMs, so the reduced path runs locally and the full
 Path A topology (3 Ubuntu machines, K3s installed by Ansible) runs on EC2 instead of Multipass VMs. Both clusters follow
-`main`, so one push deploys to both. See [ADR-001](docs/decisions.md).
+`main`, so while both are up, one push deploys to both. The AWS environment is created on demand and destroyed after
+use (see [Provision](#provision-one-command-after-init) and [Tear down](#tear-down)). See [ADR-001](docs/decisions.md).
 
 ## Workstation prerequisites
 
@@ -214,6 +219,8 @@ kubectl -n skywatch logs -l app.kubernetes.io/name=backend -f  # access logs fro
 > **Status: deployed and validated on AWS** (2026-11-09): 26 resources from one `terraform apply`, 3 nodes Ready,
 > Argo CD Synced/Healthy, app served on both workers, a second Ansible run reported `changed=0 failed=0` on every host,
 > and two GitOps rollouts completed with 0 failed requests. Details: [GitOps evidence, section 7](docs/gitops-evidence.md#7-aws-deployment-2026-11-09).
+> The environment was then destroyed (`terraform destroy`: 26 resources) to avoid ongoing costs; the commands below
+> recreate it.
 
 ```
                    your IP (/32) ── SSH 22, K8s API 6443 ──┐        app_cidrs ── HTTP 30080 ──┐
