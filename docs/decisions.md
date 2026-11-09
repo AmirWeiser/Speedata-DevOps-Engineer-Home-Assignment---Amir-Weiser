@@ -6,7 +6,7 @@ Short records of significant decisions: context, decision, consequences.
 
 - **Context:** The assignment's core targets a local cluster; AWS deployment is an explicit bonus.
 - **Decision:** Run the Path A topology (3 Ubuntu VMs, K3s installed by Ansible, 1 control plane + 2 workers) on EC2 in `us-east-1`, provisioned by Terraform. Sizing: `t3.small` control plane, 2x `t3.medium` workers (configurable).
-- **Consequences:** Real cloud networking and security groups; small hourly cost, so the environment is ephemeral (created, validated, destroyed). The README states this choice explicitly.
+- **Consequences:** Real cloud networking and security groups; small hourly cost, so the environment is ephemeral (created, validated, destroyed). The README states this choice explicitly. The reduced path (k3d, same topology) runs locally as well; both clusters deploy the same chart from `main`.
 
 ## ADR-002: Run the entire toolchain inside WSL2 Ubuntu 24.04
 

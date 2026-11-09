@@ -2,6 +2,26 @@
 
 Real issues encountered during the project, with root cause and fix.
 
+## AWS deployment
+
+### First apply: SSH timed out from a public Wi-Fi network
+- **Symptom:** all 26 resources were created and the instances passed status checks, but Ansible could not reach port 22.
+- **Root cause:** the network allowed outbound traffic only to 80/443/8080. Tested against portquiz.net and `github.com:22`: ports 22, 6443 and 30080 timed out.
+- **Fix:** destroyed the environment and redeployed from a network that allows these ports. Preflight now includes an outbound check (`timeout 5 bash -c 'echo > /dev/tcp/portquiz.net/22'`).
+
+### Bootstrap exit 127: `ansible-playbook` not found
+- **Root cause:** `terraform apply` ran from a non-login shell, so `~/.local/bin` (where pipx installs Ansible) was not on `PATH`.
+- **Fix:** run Terraform from a normal login shell. Only `terraform_data.bootstrap` was tainted; no instance was recreated.
+
+### One worker failed to install K3s: `[ERROR] Download failed`
+- **Symptom:** `skywatch-worker-2` failed in 0.14 s; the control plane then timed out waiting for 3 Ready nodes.
+- **Root cause:** GitHub release downloads returned HTTP 504 from every network (home and EC2) during a GitHub incident ("increased timeouts due to surge in anonymous users"). The other nodes had downloaded just before.
+- **Fix:** the K3s installer task retries 5 times, 30 s apart, in both roles. Safe to repeat: the script installs only after the binary's checksum verifies. ansible-lint production profile clean; the next apply completed.
+
+### `Control server error: Read-only file system: '/home/app'` at every pod start
+- **Root cause:** gunicorn 26 opens a runtime control socket under `$HOME` by default; the root filesystem is read-only. Harmless (the app served normally) but noisy, and present since the gunicorn 26 upgrade.
+- **Fix:** `--no-control-socket`. Nothing uses the control interface (Kubernetes manages the process), so disabling it is smaller than adding a writable path. Verified with `docker run --read-only --cap-drop ALL` and on both clusters after the GitOps rollout (0 occurrences).
+
 ## Pre-apply review (Stage 2)
 
 ### Bootstrap could start before the security group rules existed
@@ -30,7 +50,7 @@ Real issues encountered during the project, with root cause and fix.
 ### Secret scan did not block commits
 - **Fix:** `.githooks/pre-commit` runs gitleaks (pinned by digest) on staged changes and exits non-zero on a finding. Verified: full history (16 commits) clean; a staged fake token is blocked; the Jinja `token:` expression that the old regex flagged passes.
 
-## AWS code (Stage 2, static validation only; not yet applied)
+## AWS code (Stage 2, found during static validation)
 
 ### ansible-lint production profile: unprefixed role variables
 - **Finding:** `var-naming[no-role-prefix]` for a `set_fact` and three `register:` variables inside the roles.

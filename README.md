@@ -3,14 +3,24 @@
 A small weather-query app (Flask frontend -> Flask backend -> Open-Meteo), built, shipped and run with
 Terraform, Ansible, K3s, Helm, GitHub Actions, GHCR and ArgoCD.
 
-> **Status:** work in progress. Application, CI (GHCR), Helm chart and the Argo CD GitOps flow are complete and
-> validated end to end on a local k3d cluster. AWS infrastructure code (Terraform + Ansible) is written and
-> statically validated; **it has not been applied to AWS yet**.
+> **Status:** complete. The same chart and Argo CD Application run on two clusters: a local k3d cluster and a
+> three-node K3s cluster on AWS EC2. Both were validated end to end, including a push to `main` rolling out through
+> CI and Argo CD with zero failed requests. Evidence: [docs/gitops-evidence.md](docs/gitops-evidence.md) and the
+> [screenshots below](#proof-of-the-gitops-flow).
 
-## Chosen path
+## Chosen path: hybrid
 
-The assignment's Path A topology (3 Ubuntu VMs, K3s installed by Ansible, 1 control plane + 2 workers)
-**deployed on AWS EC2**, which the assignment lists as a bonus. See [ADR-001](docs/decisions.md).
+| | Local (Path B, reduced) | AWS (Path A topology + Terraform/AWS bonus) |
+|---|---|---|
+| Cluster | k3d from [`infra/local/k3d.yaml`](infra/local/k3d.yaml) | 3 EC2 Ubuntu 24.04 instances from Terraform ([`infra/aws`](infra/aws)) |
+| Nodes | 1 tainted server + 2 agents (containers) | `skywatch-cp` (tainted) + `skywatch-worker-1/2` |
+| K3s install | k3d (`rancher/k3s:v1.37.2-k3s1`) | Ansible roles ([`ansible/`](ansible)), pinned `v1.37.2+k3s1`, idempotent |
+| App access | `http://localhost:8081` | `http://<worker-public-ip>:30080`, allowed only from your IP |
+| Deployment | Argo CD, same Application, same chart, same `main` | same |
+
+The laptop (Windows, WSL2) cannot comfortably run three Ubuntu VMs, so the reduced path runs locally and the full
+Path A topology (3 Ubuntu machines, K3s installed by Ansible) runs on EC2 instead of Multipass VMs. Both clusters follow
+`main`, so one push deploys to both. See [ADR-001](docs/decisions.md).
 
 ## Workstation prerequisites
 
@@ -132,6 +142,19 @@ NodePort 30080 ─▶ Service skywatch-frontend ─▶ frontend (2 pods, one per
 Render or lint locally without a cluster: `helm template skywatch helm/skywatch -n skywatch`,
 `helm lint --strict helm/skywatch`.
 
+### Secrets: none in Git
+
+| Secret | Where it lives |
+|---|---|
+| App credentials | None needed (Open-Meteo has no API key); ConfigMaps hold only non-sensitive settings |
+| CI registry access | The workflow's short-lived `GITHUB_TOKEN`; no repository secrets are stored |
+| Argo CD admin password | Generated in the cluster (`argocd-initial-admin-secret`), never written to Git |
+| K3s join token | Generated on the control plane; Ansible holds it in memory only (`no_log`) |
+| kubeconfig, SSH private key, Terraform state | On the operator machine only (git-ignored; kubeconfig mode `0600`); Terraform receives only the public key |
+
+A gitleaks pre-commit hook blocks commits containing secrets. A real secret (for example a Grafana password) would be
+added as a Sealed Secret or through External Secrets, so Git only ever holds encrypted data or a reference.
+
 ## GitOps: Argo CD
 
 Git is the only deployment interface. CI never talks to the cluster; it records in Git which images to run.
@@ -188,8 +211,9 @@ kubectl -n skywatch logs -l app.kubernetes.io/name=backend -f  # access logs fro
 
 ## AWS: Terraform + Ansible
 
-> **Status: written and statically validated (fmt, validate, read-only `terraform plan`, Trivy, ansible-lint
-> production profile, template rendering). Not yet applied to AWS.**
+> **Status: deployed and validated on AWS** (2026-11-09): 26 resources from one `terraform apply`, 3 nodes Ready,
+> Argo CD Synced/Healthy, app served on both workers, a second Ansible run reported `changed=0 failed=0` on every host,
+> and two GitOps rollouts completed with 0 failed requests. Details: [GitOps evidence, section 7](docs/gitops-evidence.md#7-aws-deployment-2026-11-09).
 
 ```
                    your IP (/32) ── SSH 22, K8s API 6443 ──┐        app_cidrs ── HTTP 30080 ──┐
@@ -280,6 +304,7 @@ kubectl -n argocd get application skywatch        # Synced / Healthy
 kubectl -n skywatch get pods -o wide              # one frontend + one backend on each worker
 terraform -chdir=infra/aws output app_urls        # open http://<worker-ip>:30080/?city=Haifa
 (cd ansible && ansible-playbook site.yml)         # second run: expect changed=0
+kubectl top nodes && kubectl -n skywatch top pods # metrics-server ships with K3s
 ```
 
 ### GitOps on AWS
@@ -323,6 +348,32 @@ everything that costs money.
 | State | Local Terraform state | S3 backend with state locking, per-environment workspaces |
 | Secrets | K3s token and kubeconfig only on nodes / local `0600` file | K3s secrets encryption, external secrets manager, short-lived credentials |
 | Operations | Ubuntu unattended security updates (no automatic reboot) | Patch/reboot automation (kured), backups of the datastore |
+
+## Proof of the GitOps flow
+
+Commit `e91567c` (a Dockerfile change) on AWS, with no manual `kubectl` or `helm` command. Full timeline:
+[docs/gitops-evidence.md](docs/gitops-evidence.md#7-aws-deployment-2026-11-09).
+
+1. CI run: tests, image build/scan/publish, `update image tags` (84 s).
+
+   ![CI run](docs/images/ci-run.png)
+2. CI's tag commit `d6563b7`: a two-line change to `helm/skywatch/values.yaml`, `[skip ci]`, no workflow triggered.
+
+   ![Tag commit](docs/images/ci-tag-commit.png)
+3. Argo CD (AWS cluster) synced `d6563b7` automatically; the history also shows the previous automated rollout
+   (`ed01374`, image `cf2762c`, a frontend change).
+
+   ![Argo CD tree](docs/images/argocd-tree.png)
+   ![Argo CD history](docs/images/argocd-history.png)
+4. The application served from a worker's public IP (the page subtitle is the `cf2762c` change).
+
+   ![SkyWatch on AWS](docs/images/app-aws-haifa.png)
+
+## Problems and improvements
+
+- Problems encountered and their fixes: [docs/problems.md](docs/problems.md).
+- With more time: the "Production" column in [Known limitations](#known-limitations-and-production-improvements),
+  plus the observability bonus (Prometheus/Grafana with request metrics), an Ingress with TLS, and an HPA.
 
 ## Documentation
 
