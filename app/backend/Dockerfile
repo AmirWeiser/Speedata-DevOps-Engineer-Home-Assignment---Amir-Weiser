@@ -21,7 +21,8 @@ USER 10001
 EXPOSE 8000
 
 # One worker with threads: the work is I/O-bound (waiting on Open-Meteo); scale with replicas.
-# /dev/shm for worker heartbeat files keeps the root filesystem read-only-compatible.
+# /dev/shm for worker heartbeat files keeps the root filesystem read-only-compatible; the runtime
+# control socket (gunicorn 26+, default under $HOME) is unused, Kubernetes manages the process.
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--worker-class", "gthread", "--workers", "1", \
-     "--threads", "4", "--timeout", "30", "--worker-tmp-dir", "/dev/shm", \
+     "--threads", "4", "--timeout", "30", "--worker-tmp-dir", "/dev/shm", "--no-control-socket", \
      "--access-logfile", "-", "app:create_app()"]

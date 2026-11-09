@@ -23,5 +23,5 @@ EXPOSE 8080
 
 # Same model as the backend: one worker, threads for I/O wait, scale with replicas.
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--worker-class", "gthread", "--workers", "1", \
-     "--threads", "4", "--timeout", "30", "--worker-tmp-dir", "/dev/shm", \
+     "--threads", "4", "--timeout", "30", "--worker-tmp-dir", "/dev/shm", "--no-control-socket", \
      "--access-logfile", "-", "app:create_app()"]
