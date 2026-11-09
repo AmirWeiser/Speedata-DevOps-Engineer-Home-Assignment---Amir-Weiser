@@ -6,7 +6,7 @@ backend:
   port: 8000 # must match the port gunicorn binds in the image
   image:
     repository: ghcr.io/amirweiser/skywatch-backend
-    tag: e91567ce152c1884f2d21d37984483fac13adbf7
+    tag: cd5fd1a55b3bc19260a84fd871b065707f9c138d
   # Rendered into the backend ConfigMap and exposed as environment variables.
   config:
     GEOCODING_URL: https://geocoding-api.open-meteo.com/v1/search
@@ -25,7 +25,7 @@ frontend:
   port: 8080 # must match the port gunicorn binds in the image
   image:
     repository: ghcr.io/amirweiser/skywatch-frontend
-    tag: e91567ce152c1884f2d21d37984483fac13adbf7
+    tag: cd5fd1a55b3bc19260a84fd871b065707f9c138d
   # BACKEND_URL is derived from the backend Service name in the template.
   config:
     BACKEND_TIMEOUT: "15"
